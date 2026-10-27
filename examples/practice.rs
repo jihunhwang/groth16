@@ -7,6 +7,7 @@ use ark_relations::{
 };
 use ark_serialize::CanonicalSerialize;
 use ark_std::rand::{rngs::StdRng, SeedableRng};
+use ark_std::UniformRand;
 use std::time::Instant;
 
 // Statement: "I know secret a, b such that a * b = c" (c is public)
@@ -38,29 +39,40 @@ fn main() {
         Groth16::<Bn254>::setup(MulCircuit { a: None, b: None }, &mut rng).unwrap();
     println!("setup:  {:?}", start.elapsed());
 
-    // 2. Prove: the prover knows the secrets 3 and 5
-    let (a, b) = (Fr::from(3u64), Fr::from(5u64));
-    let start = Instant::now();
-    let proof = Groth16::<Bn254>::prove(&pk, MulCircuit { a: Some(a), b: Some(b) }, &mut rng)
-        .unwrap();
-    println!("prove:  {:?}", start.elapsed());
+    // Field elements are ~77 digits long, so only print the start of each
+    let short = |x: Fr| {
+        let s = x.to_string();
+        if s.len() > 10 { format!("{}...", &s[..10]) } else { s }
+    };
 
-    // The proof is three curve points: A and C in G1, B in G2
-    println!("A = {}", proof.a);
-    println!("B = {}", proof.b);
-    println!("C = {}", proof.c);
+    // 2–3. Prove and verify for random pairs (a, b), reusing the same keys
+    for i in 1..=9 {
+        let (a, b) = (Fr::rand(&mut rng), Fr::rand(&mut rng));
+        let c = a * b;
 
-    // What actually gets sent to the verifier: the compressed bytes
-    let mut bytes = Vec::new();
-    proof.serialize_compressed(&mut bytes).unwrap();
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    println!("proof ({} bytes) = {hex}", bytes.len());
+        let start = Instant::now();
+        let proof = Groth16::<Bn254>::prove(&pk, MulCircuit { a: Some(a), b: Some(b) }, &mut rng)
+            .unwrap();
+        let prove_time = start.elapsed();
 
-    // 3. Verify: the verifier sees only the public input c = 15
-    let start = Instant::now();
-    let ok = Groth16::<Bn254>::verify(&vk, &[Fr::from(15u64)], &proof).unwrap();
-    println!("verify: {:?}", start.elapsed());
-    let bad = Groth16::<Bn254>::verify(&vk, &[Fr::from(16u64)], &proof).unwrap();
-    println!("c = 15 verifies: {ok}");   // true
-    println!("c = 16 verifies: {bad}");  // false
+        // What actually gets sent to the verifier: the compressed bytes
+        let mut bytes = Vec::new();
+        proof.serialize_compressed(&mut bytes).unwrap();
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+        // The verifier sees only the public input c
+        let start = Instant::now();
+        let ok = Groth16::<Bn254>::verify(&vk, &[c], &proof).unwrap();
+        let verify_time = start.elapsed();
+        let bad = Groth16::<Bn254>::verify(&vk, &[c + Fr::from(1u64)], &proof).unwrap();
+
+        println!(
+            "#{i} a={} b={} c={}  prove {prove_time:?}  verify {verify_time:?}  \
+             c ok: {ok}  c+1 ok: {bad}  proof {}...",
+            short(a),
+            short(b),
+            short(c),
+            &hex[..16],
+        );
+    }
 }
